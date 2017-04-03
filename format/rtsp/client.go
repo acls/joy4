@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/md5"
-	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
@@ -39,6 +38,9 @@ const (
 )
 
 type Client struct {
+	RtspResps chan []byte
+	RtpBlocks chan []byte
+
 	DebugRtsp bool
 	DebugRtp  bool
 	Headers   []string
@@ -121,6 +123,10 @@ func Dial(uri string) (self *Client, err error) {
 	return DialTimeout(uri, 0)
 }
 
+func (self *Client) Stage() int {
+	return self.stage
+}
+
 func (self *Client) allCodecDataReady() bool {
 	for _, si := range self.setupIdx {
 		stream := self.streams[si]
@@ -194,6 +200,9 @@ func (self *Client) SendRtpKeepalive() (err error) {
 			req := Request{
 				Method: "OPTIONS",
 				Uri:    self.requestUri,
+			}
+			if self.session != "" {
+				req.Header = append(req.Header, "Session: "+self.session)
 			}
 			if err = self.WriteRequest(req); err != nil {
 				return
@@ -352,7 +361,7 @@ func (self *Client) handle401(res *Response) (err error) {
 
 			self.authHeaders = func(method string) []string {
 				headers := []string{
-					fmt.Sprintf(`Authorization: Basic %s`, base64.StdEncoding.EncodeToString([]byte(username+":"+password))),
+				// fmt.Sprintf(`Authorization: Basic %s`, base64.StdEncoding.EncodeToString([]byte(username+":"+password))),
 				}
 				if nonce != "" {
 					hs1 := md5hash(username + ":" + realm + ":" + password)
@@ -517,6 +526,19 @@ func (self *Client) readResp(b []byte) (res Response, err error) {
 	if err = self.handleResp(&res); err != nil {
 		return
 	}
+
+	if self.DebugRtsp {
+		fmt.Println("<", string(b)+string(res.Body))
+	}
+	if self.RtspResps != nil {
+		b = append(b, res.Body...)
+		// drain before sending
+		for len(self.RtspResps) > 0 {
+			<-self.RtspResps
+		}
+		self.RtspResps <- b
+	}
+
 	return
 }
 
@@ -1115,6 +1137,15 @@ func (self *Client) Play() (err error) {
 	return
 }
 
+func (self *Client) Pause() error {
+	req := Request{
+		Method: "PAUSE",
+		Uri:    self.requestUri,
+	}
+	req.Header = append(req.Header, "Session: "+self.session)
+	return self.WriteRequest(req)
+}
+
 func (self *Client) Teardown() (err error) {
 	req := Request{
 		Method: "TEARDOWN",
@@ -1146,6 +1177,22 @@ func (self *Client) handleBlock(block []byte) (pkt av.Packet, ok bool, err error
 		return
 	}
 	stream := self.streams[i]
+
+	if self.RtpBlocks != nil {
+		ok = true
+		// if stream.Sdp.Type == av.H264 {
+		if self.DebugRtp {
+			fmt.Println("rtsp: RtpBlocks len", len(block))
+			dumpsize := len(block)
+			if dumpsize > 32 {
+				dumpsize = 32
+			}
+			fmt.Print(hex.Dump(block[:dumpsize]))
+		}
+		self.RtpBlocks <- block
+		// }
+		return
+	}
 
 	herr := stream.handleRtpPacket(block[4:])
 	if herr != nil {
