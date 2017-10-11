@@ -750,8 +750,11 @@ func (self *Stream) timeScale() int {
 
 func (self *Stream) makeCodecData() (err error) {
 	media := self.Sdp
-
-	if media.PayloadType >= 96 && media.PayloadType <= 127 {
+        // The condition has been changed from originaly only accepting the range 96 - 127
+	// which is defined by the rtp protocol definition as type "dynamic"
+	// However for use in our system, we have included the additional ranges of 35 - 71
+	// and 77 - 95. Which are defined as an "undefined type" by the RTP definition.
+	if (media.PayloadType >= 35 && media.PayloadType <= 71) || (media.PayloadType >= 77 && media.PayloadType <= 127) {
 		switch media.Type {
 		case av.H264:
 			for _, nalu := range media.SpropParameterSets {
